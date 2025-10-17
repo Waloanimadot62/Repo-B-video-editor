@@ -1,0 +1,48 @@
+name: Edit job runner
+
+on:
+  push:
+    paths:
+      - 'jobs/edit/**'
+
+jobs:
+  edit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup deps
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg jq wget unzip
+          curl https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+
+      - name: Load rclone config
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+        run: |
+          if [ -n "$RCLONE_CONF_B64" ]; then
+            mkdir -p ~/.config/rclone
+            echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
+          fi
+          ls -lah ~/.config/rclone || true
+
+      - name: Make script executable
+        run: chmod +x ./scripts/edit_part.sh
+
+      - name: Run edit script for changed job(s)
+        run: |
+          JOB_FILES=$(git diff --name-only HEAD~1 HEAD | grep '^jobs/edit/' || true)
+          if [ -z "$JOB_FILES" ]; then
+            JOB_FILES=$(ls jobs/edit/*.json 2>/dev/null || true)
+          fi
+          for f in $JOB_FILES; do
+            echo "Processing edit job file: $f"
+            ./scripts/edit_part.sh "$f"
+          done
