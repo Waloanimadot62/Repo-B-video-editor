@@ -1,94 +1,48 @@
-name: 🎬 Auto Reel Processor
+name: Edit job runner
 
 on:
-  repository_dispatch:
-    types: [new_reel_link]   # Must match the "event_type" from your n8n HTTP Request
+  push:
+    paths:
+      - 'jobs/edit/**'
 
 jobs:
-  process_reel:
-    name: Process Instagram Reel
+  edit:
     runs-on: ubuntu-latest
-
-    env:
-      PYTHONUNBUFFERED: 1
-      GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-      LOG_LEVEL: INFO
+    timeout-minutes: 120
 
     steps:
-      # -------------------------------
-      # 1️⃣ Checkout Repository
-      # -------------------------------
-      - name: 🧩 Checkout Repo
-        uses: actions/checkout@v3
-
-      # -------------------------------
-      # 2️⃣ Set up Python Environment
-      # -------------------------------
-      - name: 🐍 Set up Python 3.10
-        uses: actions/setup-python@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
-          python-version: "3.10"
+          fetch-depth: 0
 
-      # -------------------------------
-      # 3️⃣ Install Dependencies
-      # -------------------------------
-      - name: 📦 Install dependencies
+      - name: Setup deps
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg jq wget unzip
+          curl https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
 
-      # -------------------------------
-      # 4️⃣ Get Payload (Instagram URL)
-      # -------------------------------
-      - name: 🔗 Get Reel Link
-        id: getlink
+      - name: Load rclone config
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
         run: |
-          echo "INSTAGRAM_URL=${{ github.event.client_payload.instagram_url }}" >> $GITHUB_ENV
-          echo "🎯 Reel URL: ${{ github.event.client_payload.instagram_url }}"
+          if [ -n "$RCLONE_CONF_B64" ]; then
+            mkdir -p ~/.config/rclone
+            echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
+          fi
+          ls -lah ~/.config/rclone || true
 
-      # -------------------------------
-      # 5️⃣ Create Job JSON (Metadata)
-      # -------------------------------
-      - name: 🗂️ Create Job Metadata
+      - name: Make script executable
+        run: chmod +x ./scripts/edit_part.sh
+
+      - name: Run edit script for changed job(s)
         run: |
-          mkdir -p jobs/split
-          echo "{ \"reel_url\": \"${INSTAGRAM_URL}\", \"job_id\": \"$(date +%s)\" }" > jobs/split/job_${{ github.run_id }}.json
-          echo "Created jobs/split/job_${{ github.run_id }}.json"
-
-      # -------------------------------
-      # 6️⃣ Download Reel
-      # -------------------------------
-      - name: ⬇️ Download Reel Video
-        run: |
-          python scripts/download_reel.py jobs/split/job_${{ github.run_id }}.json
-
-      # -------------------------------
-      # 7️⃣ Process Video (Crop + Text + Logo)
-      # -------------------------------
-      - name: 🎨 Process Video with AI Cropping
-        run: |
-          python scripts/process_video.py jobs/split/job_${{ github.run_id }}.json
-
-      # -------------------------------
-      # 8️⃣ Upload to Google Drive
-      # -------------------------------
-      - name: ☁️ Upload Processed Video to Google Drive
-        run: |
-          python scripts/upload_drive.py jobs/split/job_${{ github.run_id }}.json
-
-      # -------------------------------
-      # 9️⃣ Save Artifacts (Optional)
-      # -------------------------------
-      - name: 🧱 Upload Logs & Output as Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: processed_output
-          path: |
-            jobs/split/
-            output/
-
-      # -------------------------------
-      # 🔟 Success Message
-      # -------------------------------
-      - name: ✅ Job Completed
-        run: echo "🎉 Processing completed successfully for ${{ github.event.client_payload.instagram_url }}"
+          JOB_FILES=$(git diff --name-only HEAD~1 HEAD | grep '^jobs/edit/' || true)
+          if [ -z "$JOB_FILES" ]; then
+            JOB_FILES=$(ls jobs/edit/*.json 2>/dev/null || true)
+          fi
+          for f in $JOB_FILES; do
+            echo "Processing edit job file: $f"
+            ./scripts/edit_part.sh "$f"
+          done
